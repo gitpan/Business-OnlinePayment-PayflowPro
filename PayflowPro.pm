@@ -14,16 +14,17 @@ require Exporter;
 @ISA = qw(Exporter AutoLoader Business::OnlinePayment);
 @EXPORT = qw();
 @EXPORT_OK = qw();
-$VERSION = '0.01';
+$VERSION = '0.02';
 
 sub set_defaults {
     my $self = shift;
 
-    #$self->server('staging.linkpt.net');
     $self->server('payflow.verisign.com');
     $self->port('443');
 
-    $self->build_subs(qw( vendor partner order_number cert_path ));
+    $self->build_subs(qw(
+      vendor partner order_number cert_path avs_code cvv2_code
+    ));
 
 }
 
@@ -32,17 +33,12 @@ sub map_fields {
 
     my %content = $self->content();
 
-    my $action = lc($content{'action'});
-    if ( $action eq 'normal authorization' ) {
-    } else {
-      croak "$action not (yet) supported";
-    }
-
     #ACTION MAP
     my %actions = ('normal authorization' => 'S', #Sale
                    'authorization only'   => 'A', #Authorization
                    'credit'               => 'C', #Credit (refund)
                    'post authorization'   => 'D', #Delayed Capture
+                   'void'                 => 'V',
                   );
     $content{'action'} = $actions{lc($content{'action'})} || $content{'action'};
 
@@ -106,9 +102,6 @@ sub get_fields {
 sub submit {
     my($self) = @_;
 
-
-    
-
     $self->map_fields();
 
     my %content = $self->content;
@@ -123,11 +116,14 @@ sub submit {
                         $self->transaction_type());
         }
 
-      $content{'expiration'} =~ /^(\d+)\D+\d*(\d{2})$/
-        or croak "unparsable expiration $content{expiration}";
+      if ( exists($content{'expiration'}) && defined($content{'expiration'})
+           && length($content{'expiration'})                                 ) {
+        $content{'expiration'} =~ /^(\d+)\D+\d*(\d{2})$/
+          or croak "unparsable expiration $content{expiration}";
 
-      ( $month, $year ) = ( $1, $2 );
-      $month = '0'. $month if $month =~ /^\d$/;
+        ( $month, $year ) = ( $1, $2 );
+        $month = '0'. $month if $month =~ /^\d$/;
+      }
 
       $zip = $content{'zip'} =~ s/\D//;
     #}
@@ -163,16 +159,28 @@ sub submit {
       EMAIL       => 'email',
       STATE       => 'state',
 
+      CVV2        => 'cvv2',
+      ORIGID      => 'order_number'
+
     );
 
-    $self->required_fields(qw(
-      ACCT EXPDATE AMT USER VENDOR PARTNER PWD TRXTYPE TENDER ));
+    my @required = qw( TRXTYPE TENDER PARTNER VENDOR USER PWD );
+    if (  $self->transaction_type() eq 'C' ) { #credit card
+      if ( $content{'action'} =~ /^[CDV]$/ && exists($content{'ORIGID'})
+           && defined($content{'ORIGID'}) && length($content{'ORIGID'}) ) {
+        push @required, qw(ORIGID);
+      } else {
+        push @required, qw(AMT ACCT EXPDATE);
+      }
+    }
+    $self->required_fields(@required);
 
     my %params = $self->get_fields(qw(
       ACCT EXPDATE AMT USER VENDOR PARTNER PWD TRXTYPE TENDER
       STREET ZIP
       CITY COMMENT1 COMMENT2 COMPANYNAME COUNTRY FIRSTNAME LASTNAME NAME EMAIL
         STATE
+      CVV2 ORIGID
     ));
 
     #print "$_ => $params{$_}\n" foreach keys %params;
@@ -188,6 +196,18 @@ sub submit {
       $self->error_message( $response->{'RESPMSG'}  );
       $self->authorization( $response->{'AUTHCODE'} );
       $self->order_number(  $response->{'PNREF'}    );
+      my $avs_code = '';
+      if ( $response->{AVSADDR} eq 'Y' && $response->{AVSZIP} eq 'Y' ) {
+        $avs_code = 'Y';
+      } elsif ( $response->{AVSADDR} eq 'Y' ) {
+        $avs_code = 'A';
+      } elsif ( $response->{AVSZIP} eq 'Y' ) {
+        $avs_code = 'Z';
+      } elsif ( $response->{AVSADDR} eq 'N' || $response->{AVSZIP} eq 'N' ) {
+        $avs_code = 'N';
+      }
+      $self->avs_code(      $avs_code               );
+      $self->cvv2_code(     $response->{'CVV2MATCH'});
     } else {
       $self->is_success(0);
       $self->result_code(   $response->{'RESULT'}  );
@@ -210,6 +230,7 @@ Business::OnlinePayment::PayflowPro - Verisign PayflowPro backend for Business::
   my $tx = new Business::OnlinePayment( 'PayflowPro',
     'vendor'    => 'your_vendor',
     'partner'   => 'your_partner',
+    'cert_path' => '/path/to/your/certificate/file/', #just the dir
   );
 
   $tx->content(
@@ -227,18 +248,40 @@ Business::OnlinePayment::PayflowPro - Verisign PayflowPro backend for Business::
       email          => 'ivan-payflowpro@420.am',
       card_number    => '4007000000027',
       expiration     => '09/04',
+
+      #advanced params
+      cvv2           => '420',
+      order_number   => 'string', # returned by $tx->order_number() from an
+                                  # "authorization only" or
+                                  # "normal authorization" action, used by a
+                                  # "credit", "void", or "post authorization"
   );
   $tx->submit();
 
   if($tx->is_success()) {
       print "Card processed successfully: ".$tx->authorization."\n";
+      print "order number: ". $tx->order_number. "\n";
+      print "AVS code: ". $tx->avs_code. "\n"; # Y - Address and ZIP match
+                                               # A - Address matches but not ZIP
+                                               # Z - ZIP matches bu tnot address
+                                               # N - no match
+                                               # E - AVS error or unsupported
+                                               # (null) - AVS error
+      print "CVV2 code: ". $tx->cvv2_code. "\n";
+
   } else {
-      print "Card was rejected: ".$tx->error_message."\n";
+      print "Card was rejected: ".$tx->error_message;
+      print " (CVV2 mismatch)" if $tx->result_code == 114;
+      print "\n";
   }
 
 =head1 SUPPORTED TRANSACTION TYPES
 
-=head2 Visa, MasterCard, American Express, JCB, Discover/Novus, Carte blanche/Diners Club
+=head2 Visa, MasterCard, American Express, JCB, Discover/Novus, Carte blanche/Diners Club, CC
+
+=head1 SUPPORTED ACTIONS
+
+=head2 Normal Authorization, Authorization Only, Post Authorization, Credit, Void
 
 =head1 DESCRIPTION
 
