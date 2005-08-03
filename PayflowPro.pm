@@ -125,7 +125,7 @@ sub submit {
         $month = '0'. $month if $month =~ /^\d$/;
       }
 
-      $zip = $content{'zip'} =~ s/\D//;
+      ( $zip = $content{'zip'} ) =~ s/\D//g;
     #}
 
     #$content{'address'} =~ /^(\S+)\s/;

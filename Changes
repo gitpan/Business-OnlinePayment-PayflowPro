@@ -1,5 +1,9 @@
 Revision history for Perl extension Business::OnlinePayment::PayflowPro.
 
+0.03  Tue Aug  2 17:56:11 PDT 2005
+	- Fix inadvertant clobbering of zip code, patch from
+	  <phil@perkpartners.com>, CPAN bug #13896
+
 0.02  Thu Oct  7 15:58:44 PDT 2004
 	- sponsored by Pro Softnet Corp. / ibackup.com:
 	  - cvv2 support
