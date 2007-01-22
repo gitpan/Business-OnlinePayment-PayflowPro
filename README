@@ -1,18 +1,20 @@
 Copyright (c) 2003 Ivan Kohler
-All rights reserved. This program is free software; you can redistribute it
-and/or modify it under the same terms as Perl itself.
+All rights reserved. This program is free software; you can
+redistribute it and/or modify it under the same terms as Perl itself.
 
-This is Business::OnlinePayment::PayflowPro, an Business::OnlinePayment
-backend module for Verisign Payflow Pro.  It is only useful if you have a
-merchant account with Verisign Payment Services:
-http://www.verisign.com/products/payment.html and the "Payflow Pro SDK":
-https://manager.verisign.com/
+This is Business::OnlinePayment::PayflowPro, a Business::OnlinePayment
+back end module for PayPal Payflow Pro.  It is only useful if you have
+a merchant account with PayPal Payment Services:
+  https://www.paypal.com/cgi-bin/webscr?cmd=_payflow-gateway-overview-outside
+and the Payflow Pro SDK:
+  https://manager.paypal.com/
 
-It is based on Business::OnlinePayment::AuthorizeNet written by Jason Kohles.
+It is based on Business::OnlinePayment::AuthorizeNet written by Jason
+Kohles.
 
 Ivan Kohler <ivan-payflowpro@420.am>
 
-Business::OnlinePayment is a generic interface for processing payments through
-online credit card processors, online check acceptance houses, etc.  (If you
-like buzzwords, call it an "multiplatform ecommerce-enabling middleware
-solution").
+Business::OnlinePayment is a generic interface for processing payments
+through online credit card processors, online check acceptance houses,
+etc.  (If you like buzzwords, call it an "multiplatform
+ecommerce-enabling middleware solution").

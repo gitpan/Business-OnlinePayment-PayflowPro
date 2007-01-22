@@ -1,5 +1,28 @@
 Revision history for Perl extension Business::OnlinePayment::PayflowPro.
 
+0.05  Mon Jan 22 00:58:04 EST 2007
+	[Jan 22 2007 by Phil Lobbes <phil at perkpartners.com>]
+	- Test cases: new tests and cleanup of existing tests
+	- Major update of documentation
+	- Now attempt to set avs_code, cvv2_code, result_code,
+	  error_message and authorization on success or failure.
+	- Ran PayflowPro.pm through perltidy (1.12 -> 1.13)
+	[Dec 23 2006 by Phil Lobbes <phil at perkpartners.com>]
+	- CPAN bug #13896 order_number() (which provides access to PNREF)
+	  is not set when transaction fails [FIXED].
+	- Remove AutoLoader/Exporter per Jo Rhett <jrhett at netconsonance.com>
+	- "use" (instead of "require") Business::OnlinePayment
+	- remove build_subs() and get_fields() (provided by B::OP)
+	- Fixed bug: VENDOR set to login instead of vendor
+	  (will still use login if VENDOR is not set)
+	- minor cleanup remove commented out code, reformat docs a little
+
+0.04  Wed Oct 11 04:00:36 PDT 2006
+	- Prevent unnecessary warnings when no AVS response elements are
+	  received, patch from Michael Peters <mpeters@plusthree.com>
+	- have tests work with environment variables
+	- forgot to increment the version number in 0.03
+
 0.03  Tue Aug  2 17:56:11 PDT 2005
 	- Fix inadvertant clobbering of zip code, patch from
 	  <phil@perkpartners.com>, CPAN bug #13896
@@ -12,4 +35,3 @@ Revision history for Perl extension Business::OnlinePayment::PayflowPro.
 
 0.01  Wed Jan 22 02:47:25 PST 2003
 	- original version; created by ivan 1.0
-

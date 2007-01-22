@@ -3,7 +3,8 @@ Changes
 MANIFEST
 Makefile.PL
 README
+t/00load.t
 t/bop.t
-t/load.t
-t/bad_auth.t
 t/credit_card.t
+t/pod.t
+META.yml                                 Module meta-data (added by MakeMaker)
