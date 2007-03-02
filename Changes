@@ -1,5 +1,8 @@
 Revision history for Perl extension Business::OnlinePayment::PayflowPro.
 
+0.06  Thu Mar  1 10:01:33 EST 2007
+	- zip now allows alphanumerics for non-US zips
+
 0.05  Mon Jan 22 00:58:04 EST 2007
 	[Jan 22 2007 by Phil Lobbes <phil at perkpartners.com>]
 	- Test cases: new tests and cleanup of existing tests

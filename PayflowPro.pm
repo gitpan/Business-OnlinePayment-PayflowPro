@@ -8,7 +8,7 @@ use base qw(Business::OnlinePayment);
 # Payflow Pro SDK
 use PFProAPI qw( pfpro );
 
-$VERSION = '0.05';
+$VERSION = '0.06';
 $VERSION = eval $VERSION;
 
 sub set_defaults {
@@ -104,7 +104,7 @@ sub submit {
         $month = '0' . $month if $month =~ /^\d$/;
     }
 
-    ( $zip = $content{'zip'} ) =~ s/\D//g;
+    ( $zip = $content{'zip'} ) =~ s/[^[:alnum:]]//g;
 
     $self->server('test-payflow.verisign.com') if $self->test_transaction;
 
@@ -135,7 +135,7 @@ sub submit {
         STREET      => 'address',
         CITY        => 'city',
         STATE       => 'state',
-        ZIP         => \$zip,               # 'zip' with non-numbers removed
+        ZIP         => \$zip,               # 'zip' with non-alnums removed
         COUNTRY     => 'country',
     );
 
@@ -375,7 +375,7 @@ from content(%content):
       STREET      => 'address',
       CITY        => 'city',
       STATE       => 'state',
-      ZIP         => \$zip, # 'zip' with non-numbers removed
+      ZIP         => \$zip, # 'zip' with non-alphanumerics removed
       COUNTRY     => 'country',
 
 The required Payflow Pro parameters for credit card transactions are:
