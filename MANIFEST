@@ -6,5 +6,6 @@ README
 t/00load.t
 t/bop.t
 t/credit_card.t
+t/pod-coverage.t
 t/pod.t
 META.yml                                 Module meta-data (added by MakeMaker)

@@ -1,30 +1,93 @@
 package Business::OnlinePayment::PayflowPro;
 
 use strict;
-use vars qw($VERSION);
-use Carp qw(croak);
-use base qw(Business::OnlinePayment);
+use vars qw($VERSION $DEBUG);
+use Carp qw(carp croak);
+use CGI;
+use Digest::MD5;
+use Business::OnlinePayment::HTTPS 0.06;
 
-# Payflow Pro SDK
-use PFProAPI qw( pfpro );
+use base qw(Business::OnlinePayment::HTTPS);
 
-$VERSION = '0.06';
+$VERSION = '0.07_06';
 $VERSION = eval $VERSION;
+$DEBUG   = 0;
+
+# return current request_id or generate a new one if not yet set
+sub request_id {
+    my $self = shift;
+    if ( ref($self) ) {
+        $self->{"__request_id"} = shift if (@_); # allow value change/reset
+        $self->{"__request_id"} = $self->_new_request_id()
+          unless ( $self->{"__request_id"} );
+        return $self->{"__request_id"};
+    }
+    else {
+        return $self->_new_request_id();
+    }
+}
+
+sub _new_request_id {
+    my $self = shift;
+    my $md5  = Digest::MD5->new();
+    $md5->add( $$, time(), rand(time) );
+    return $md5->hexdigest();
+}
+
+sub debug {
+    my $self = shift;
+
+    if (@_) {
+        my $level = shift || 0;
+        if ( ref($self) ) {
+            $self->{"__DEBUG"} = $level;
+        }
+        else {
+            $DEBUG = $level;
+        }
+        $Business::OnlinePayment::HTTPS::DEBUG = $level;
+    }
+    return ref($self) ? ( $self->{"__DEBUG"} || $DEBUG ) : $DEBUG;
+}
+
+# cvv2_code: support legacy code and but deprecate method
+sub cvv2_code { shift->cvv2_response(@_); }
 
 sub set_defaults {
     my $self = shift;
+    my %opts = @_;
 
-    $self->server('payflow.verisign.com');
-    $self->port('443');
+    # standard B::OP methods/data
+    #$self->server("payflow.verisign.com");
+    $self->server("payflowpro.verisign.com");
+    $self->port("443");
+    $self->path("/transaction");
 
-    $self->build_subs(
-        qw(
-          vendor partner cert_path order_number avs_code cvv2_code
-          )
-    );
+    $self->build_subs(qw( 
+                          partner vendor
+                          client_certification_id client_timeout
+                          headers test_server
+                          cert_path
+                          order_number avs_code cvv2_response
+                          response_page response_code response_headers
+                     ));
+
+    # module specific data
+    if ( $opts{debug} ) {
+        $self->debug( $opts{debug} );
+        delete $opts{debug};
+    }
+
+    # HTTPS Interface Dev Guide: must be set but will be removed in future
+    $self->client_certification_id("ClientCertificationIdNotSet");
+
+    # required: 45 secs recommended by HTTPS Interface Dev Guide
+    $self->client_timeout(45);
+
+    $self->test_server( "pilot-payflowpro.verisign.com" );
 }
 
-sub map_fields {
+sub _map_fields {
     my ($self) = @_;
 
     my %content = $self->content();
@@ -48,6 +111,7 @@ sub map_fields {
         'american express' => 'C',
         'discover'         => 'C',
         'cc'               => 'C',
+
         #'check'            => 'ECHECK',
     );
 
@@ -59,17 +123,7 @@ sub map_fields {
     $self->content(%content);
 }
 
-sub remap_fields {
-    my ( $self, %map ) = @_;
-
-    my %content = $self->content();
-    foreach ( keys %map ) {
-        $content{ $map{$_} } = $content{$_};
-    }
-    $self->content(%content);
-}
-
-sub revmap_fields {
+sub _revmap_fields {
     my ( $self, %map ) = @_;
     my %content = $self->content();
     foreach ( keys %map ) {
@@ -81,51 +135,56 @@ sub revmap_fields {
     $self->content(%content);
 }
 
+sub expdate_mmyy {
+    my $self       = shift;
+    my $expiration = shift;
+    my $expdate_mmyy;
+    if ( defined($expiration) and $expiration =~ /^(\d+)\D+\d*(\d{2})$/ ) {
+        my ( $month, $year ) = ( $1, $2 );
+        $expdate_mmyy = sprintf( "%02d", $month ) . $year;
+    }
+    return defined($expdate_mmyy) ? $expdate_mmyy : $expiration;
+}
+
 sub submit {
     my ($self) = @_;
 
-    $self->map_fields();
+    $self->_map_fields();
 
     my %content = $self->content;
-
-    my ( $month, $year, $zip );
 
     if ( $self->transaction_type() ne 'C' ) {
         croak( "PayflowPro can't (yet?) handle transaction type: "
               . $self->transaction_type() );
     }
 
-    if ( defined( $content{'expiration'} ) && length( $content{'expiration'} ) )
-    {
-        $content{'expiration'} =~ /^(\d+)\D+\d*(\d{2})$/
-          or croak "unparsable expiration $content{expiration}";
+    my $expdate_mmyy = $self->expdate_mmyy( $content{"expiration"} );
+    my $zip          = $content{'zip'};
+    $zip =~ s/[^[:alnum:]]//g;
 
-        ( $month, $year ) = ( $1, $2 );
-        $month = '0' . $month if $month =~ /^\d$/;
-    }
+    $self->server( $self->test_server ) if $self->test_transaction;
 
-    ( $zip = $content{'zip'} ) =~ s/[^[:alnum:]]//g;
+    my $vendor  = $self->vendor;
+    my $partner = $self->partner;
 
-    $self->server('test-payflow.verisign.com') if $self->test_transaction;
+    $self->_revmap_fields(
 
-    $self->revmap_fields(
+        # BUG?: VENDOR B::OP:PayflowPro < 0.05 backward compatibility.  If
+        # vendor not set use login although test indicate undef vendor is ok
+        VENDOR => $vendor ? \$vendor : 'login',
+        PARTNER  => \$partner,
+        USER     => 'login',
+        PWD      => 'password',
+        TRXTYPE  => 'action',
+        TENDER   => 'type',
+        ORIGID   => 'order_number',
+        COMMENT1 => 'description',
+        COMMENT2 => 'invoice_number',
 
-        # (BUG?) VENDOR B::OP:PayflowPro < 0.05 backward compatibility.  If
-        # vendor not set use login (although test indicate undef vendor is ok)
-        VENDOR      => $self->vendor ? \( $self->vendor ) : 'login',
-        PARTNER     => \( $self->partner ),
-        USER        => 'login',
-        PWD         => 'password',
-        TRXTYPE     => 'action',
-        TENDER      => 'type',
-        ORIGID      => 'order_number',
-        COMMENT1    => 'description',
-        COMMENT2    => 'invoice_number',
-
-        ACCT        => 'card_number',
-        CVV2        => 'cvv2',
-        EXPDATE     => \( $month . $year ), # MM/YY from 'expiration'
-        AMT         => 'amount',
+        ACCT    => 'card_number',
+        CVV2    => 'cvv2',
+        EXPDATE => \$expdate_mmyy,    # MM/YY from 'expiration'
+        AMT     => 'amount',
 
         FIRSTNAME   => 'first_name',
         LASTNAME    => 'last_name',
@@ -135,7 +194,7 @@ sub submit {
         STREET      => 'address',
         CITY        => 'city',
         STATE       => 'state',
-        ZIP         => \$zip,               # 'zip' with non-alnums removed
+        ZIP         => \$zip,          # 'zip' with non-alnums removed
         COUNTRY     => 'country',
     );
 
@@ -148,6 +207,7 @@ sub submit {
             push @required, qw(ORIGID);
         }
         else {
+
             # never get here, we croak above if transaction_type ne 'C'
             push @required, qw(AMT ACCT EXPDATE);
         }
@@ -163,39 +223,72 @@ sub submit {
           )
     );
 
-    $ENV{'PFPRO_CERT_PATH'} = $self->cert_path;
-    my ( $response, $resultstr ) =
-      pfpro( \%params, $self->server, $self->port );
+    # get header data
+    my %req_headers = %{ $self->headers || {} };
+
+    # get request_id from %content if defined for ease of use
+    if ( defined $content{"request_id"} ) {
+        $self->request_id( $content{"request_id"} );
+    }
+
+    unless ( defined( $req_headers{"X-VPS-Request-ID"} ) ) {
+        $req_headers{"X-VPS-Request-ID"} = $self->request_id();
+    }
+
+    unless ( defined( $req_headers{"X-VPS-VIT-Client-Certification-Id"} ) ) {
+        $req_headers{"X-VPS-VIT-Client-Certification-Id"} =
+          $self->client_certification_id;
+    }
+
+    unless ( defined( $req_headers{"X-VPS-Client-Timeout"} ) ) {
+        $req_headers{"X-VPS-Client-Timeout"} = $self->client_timeout();
+    }
+
+    my %options = (
+        "Content-Type" => "text/namevalue",
+        "headers"      => \%req_headers,
+    );
+
+    my ( $page, $resp, %resp_headers ) =
+      $self->https_post( \%options, \%params );
+
+    $self->response_code( $resp );
+    $self->response_page( $page );
+    $self->response_headers( \%resp_headers );
+
+    # $page should contain name=value[[&name=value]...] pairs
+    my $cgi = CGI->new("$page");
 
     # AVS and CVS values may be set on success or failure
     my $avs_code;
-    if ( exists $response->{AVSADDR} || exists $response->{AVSZIP} ) {
-        if ( $response->{AVSADDR} eq 'Y' && $response->{AVSZIP} eq 'Y' ) {
-            $avs_code = 'Y';
+    if ( defined $cgi->param("AVSADDR") or defined $cgi->param("AVSZIP") ) {
+        if ( $cgi->param("AVSADDR") eq "Y" && $cgi->param("AVSZIP") eq "Y" ) {
+            $avs_code = "Y";
         }
-        elsif ( $response->{AVSADDR} eq 'Y' ) {
-            $avs_code = 'A';
+        elsif ( $cgi->param("AVSADDR") eq "Y" ) {
+            $avs_code = "A";
         }
-        elsif ( $response->{AVSZIP} eq 'Y' ) {
-            $avs_code = 'Z';
+        elsif ( $cgi->param("AVSZIP") eq "Y" ) {
+            $avs_code = "Z";
         }
-        elsif ( $response->{AVSADDR} eq 'N' || $response->{AVSZIP} eq 'N' ) {
-            $avs_code = 'N';
+        elsif ( $cgi->param("AVSADDR") eq "N" or $cgi->param("AVSZIP") eq "N" )
+        {
+            $avs_code = "N";
         }
         else {
-            $avs_code = '';
+            $avs_code = "";
         }
     }
 
     $self->avs_code($avs_code);
-    $self->cvv2_code( $response->{'CVV2MATCH'} );
-    $self->result_code( $response->{'RESULT'} );
-    $self->order_number( $response->{'PNREF'} );
-    $self->error_message( $response->{'RESPMSG'} );
-    $self->authorization( $response->{'AUTHCODE'} );
+    $self->cvv2_response( $cgi->param("CVV2MATCH") );
+    $self->result_code( $cgi->param("RESULT") );
+    $self->order_number( $cgi->param("PNREF") );
+    $self->error_message( $cgi->param("RESPMSG") );
+    $self->authorization( $cgi->param("AUTHCODE") );
 
     # RESULT must be an explicit zero, not just numerically equal
-    if ( $response->{'RESULT'} eq '0' ) {
+    if ( $cgi->param("RESULT") eq "0" ) {
         $self->is_success(1);
     }
     else {
@@ -217,9 +310,9 @@ Business::OnlinePayment::PayflowPro - Payflow Pro backend for Business::OnlinePa
   
   my $tx = new Business::OnlinePayment(
       'PayflowPro',
-      'vendor'    => 'your_vendor',
-      'partner'   => 'your_partner',
-      'cert_path' => '/path/to/your/certificate/file/',    # just the dir
+      'vendor'  => 'your_vendor',
+      'partner' => 'your_partner',
+      'client_certification_id' => 'GuidUpTo32Chars',
   );
   
   # See the module documentation for details of content()
@@ -240,6 +333,7 @@ Business::OnlinePayment::PayflowPro - Payflow Pro backend for Business::OnlinePa
       expiration     => '12/09',
       cvv2           => '123',
       order_number   => 'string',
+      request_id     => 'unique_identifier_for_transaction',
   );
   
   $tx->submit();
@@ -248,7 +342,7 @@ Business::OnlinePayment::PayflowPro - Payflow Pro backend for Business::OnlinePa
       print(
           "Card processed successfully: ", $tx->authorization, "\n",
           "order number: ",                $tx->order_number,  "\n",
-          "CVV2 code: ",                   $tx->cvv2_code,     "\n",
+          "CVV2 response: ",               $tx->cvv2_response, "\n",
           "AVS code: ",                    $tx->avs_code,      "\n",
       );
   }
@@ -271,10 +365,89 @@ via the PayPal's Payflow Pro Internet payment solution.
 See L<Business::OnlinePayment> for details on the interface this
 modules supports.
 
+=head1 Standard methods
+
+=over 4
+
+=item set_defaults()
+
+This method sets the 'server' attribute to 'payflowpro.verisign.com'
+and the port attribute to '443'.  This method also sets up the
+L</Module specific methods> described below.
+
+=item submit()
+
+=back
+
+=head1 Unofficial methods
+
+This module provides the following methods which are not officially
+part of the standard Business::OnlinePayment interface (as of 3.00_06)
+but are nevertheless supported by multiple gateways modules and
+expected to be standardized soon:
+
+=over 4
+
+=item L<order_number()|/order_number()>
+
+=item L<avs_code()|/avs_code()>
+
+=item L<cvv2_response()|/cvv2_response()>
+
+=back
+
 =head1 Module specific methods
 
 This module provides the following methods which are not currently
 part of the standard Business::OnlinePayment interface:
+
+=head2 client_certification_id()
+
+This gets/sets the X-VPS-VITCLIENTCERTIFICATION-ID which is REQUIRED
+and defaults to "ClientCertificationIdNotSet".  This is described in
+Website Payments Pro HTTPS Interface Developer's Guide as follows:
+
+"A random globally unique identifier (GUID) that is currently
+required. This requirement will be removed in the future. At this
+time, you can send any alpha-numeric ID up to 32 characters in length.
+
+NOTE: Once you have created this ID, do not change it. Use the same ID
+for every transaction."
+
+=head2 client_timeout()
+
+Timeout value, in seconds, after which this transaction should be
+aborted.  Defaults to 45, the value recommended by the Website
+Payments Pro HTTPS Interface Developer's Guide.
+
+=head2 debug()
+
+Enable or disble debugging.  The value specified here will also set
+$Business::OnlinePayment::HTTPS::DEBUG in submit() to aid in
+troubleshooting problems.
+
+=head2 expdate_mmyy()
+
+The expdate_mmyy() method takes a single scalar argument (typically
+the value in $content{expiration}) and attempts to parse and format
+and put the date in MMYY format as required by PayflowPro
+specification.  If unable to parse the expiration date simply leave it
+as is and let the PayflowPro system attempt to handle it as-is.
+
+=head2 request_id()
+
+It is recommended that you specify your own unique request_id for each
+transaction in %content.  A request_id is REQUIRED by the PayflowPro
+processor.  If a request_id is not set, then Digest::MD5 is used to
+attempt to generate a request_id for a transaction.
+
+=head2 Deprecated methods
+
+The following methods are deprecated and may be removed in a future
+release.  Values for vendor and partner should now be set as arguments
+to Business::OnlinePayment->new().  The value for cert_path was used
+to support passing a path to PFProAPI.pm (a Perl module/SDK from
+Verisign/Paypal) which is no longer used.
 
 =over 4
 
@@ -284,11 +457,7 @@ part of the standard Business::OnlinePayment interface:
 
 =item cert_path()
 
-=item L<order_number()|/order_number()>
-
-=item L<avs_code()|/avs_code()>
-
-=item L<cvv2_code()|/cvv2_code()>
+=item cvv2_code()
 
 =back
 
@@ -300,7 +469,7 @@ The following default settings exist:
 
 =item server
 
-payflow.verisign.com or test-payflow.verisign.com if
+payflowpro.verisign.com or pilot-payflowpro.verisign.com if
 test_transaction() is TRUE
 
 =item port
@@ -426,15 +595,16 @@ follows:
   N     - no match
   undef - AVS values not available
 
-=head2 cvv2_code()
+=head2 cvv2_response()
 
-The cvv2_code() method returns the CVV2MATCH field, which is a
+The cvv2_response() method returns the CVV2MATCH field, which is a
 response message returned with the transaction result.
 
 =head1 COMPATIBILITY
 
-This module implements an interface to the Payflow Pro Perl API, which
-can be downloaded at https://manager.paypal.com/ with a valid login.
+As of 0.07, this module communicates with the Payflow gateway directly
+and no longer requires the Payflow Pro SDK or other download.  Thanks
+to Phil Lobbes for this great work.
 
 =head1 AUTHORS
 
