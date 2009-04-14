@@ -1,6 +1,9 @@
 Revision history for Perl extension Business::OnlinePayment::PayflowPro.
 
-0.07  
+0.07  Tue Apr 14 13:49:50 EDT 2009 plobbes
+	- update server names per latest PayPal docs:
+	   payflow.verisign.com => payflowpro.verisign.com
+	   pilot-payflowpro.verisign.com => pilot-payflowpro.paypal.com
 	[0.07_06 Sat Oct 18 14:15:03 EDT 2008] plobbes
 	- include most of the patches from Frédéric Brière at fbriere.net
 	- request_id now only generates a new id when not set

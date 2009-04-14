@@ -1,7 +1,7 @@
 # http://module-build.sourceforge.net/META-spec.html
 #XXXXXXX This is a prototype!!!  It will change in the future!!! XXXXX#
 name:         Business-OnlinePayment-PayflowPro
-version:      0.07_06
+version:      0.07
 version_from: PayflowPro.pm
 installdirs:  site
 requires:

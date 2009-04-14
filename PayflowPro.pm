@@ -9,7 +9,7 @@ use Business::OnlinePayment::HTTPS 0.06;
 
 use base qw(Business::OnlinePayment::HTTPS);
 
-$VERSION = '0.07_06';
+$VERSION = '0.07';
 $VERSION = eval $VERSION;
 $DEBUG   = 0;
 
@@ -58,8 +58,7 @@ sub set_defaults {
     my %opts = @_;
 
     # standard B::OP methods/data
-    #$self->server("payflow.verisign.com");
-    $self->server("payflowpro.verisign.com");
+    $self->server("payflowpro.paypal.com");
     $self->port("443");
     $self->path("/transaction");
 
@@ -84,7 +83,7 @@ sub set_defaults {
     # required: 45 secs recommended by HTTPS Interface Dev Guide
     $self->client_timeout(45);
 
-    $self->test_server( "pilot-payflowpro.verisign.com" );
+    $self->test_server( "pilot-payflowpro.paypal.com" );
 }
 
 sub _map_fields {
@@ -371,7 +370,7 @@ modules supports.
 
 =item set_defaults()
 
-This method sets the 'server' attribute to 'payflowpro.verisign.com'
+This method sets the 'server' attribute to 'payflowpro.paypal.com'
 and the port attribute to '443'.  This method also sets up the
 L</Module specific methods> described below.
 
@@ -469,7 +468,7 @@ The following default settings exist:
 
 =item server
 
-payflowpro.verisign.com or pilot-payflowpro.verisign.com if
+payflowpro.paypal.com or pilot-payflowpro.paypal.com if
 test_transaction() is TRUE
 
 =item port

@@ -24,7 +24,7 @@ my $driver  = "PayflowPro";
     can_ok( $obj, qw(_map_fields _revmap_fields) );
 
     # defaults
-    my $server = "payflowpro.verisign.com";
+    my $server = "payflowpro.paypal.com";
 
     is( $obj->server, $server, "server($server)" );
     is( $obj->port, "443", "port(443)" );
