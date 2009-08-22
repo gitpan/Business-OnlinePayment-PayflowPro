@@ -2,7 +2,7 @@
 
 use strict;
 use warnings;
-use Test::More tests => 24;
+use Test::More tests => 30;
 
 use Business::OnlinePayment;
 
@@ -97,4 +97,44 @@ my $driver  = "PayflowPro";
     $id = "foo";
     is( $obj->request_id($id), $id, "request_id() can be set" );
     is( $obj->request_id, $id, "request_id() remains set" );
+}
+
+{    # _get_response - response parsing
+    my $obj = $package->new($driver);
+
+    is_deeply(
+        $obj->_get_response('%66%6F%78=%71%75%69%63%6B%20%25%26%3B&e=3+3'),
+        { fox => 'quick %&;', e => '3 3' },
+        "_get_response 1 returns correct value"
+    );
+    is_deeply(
+        $obj->_get_response('Foo=&&&&;;ab=t+t;q=2'),
+        { Foo => '', ab => 't t', q => '2' },
+        "_get_response 2 returns correct value"
+    );
+    is_deeply(
+        $obj->_get_response('f=s'),
+        { f => 's' },
+        "_get_response 3 returns correct value"
+    );
+    is_deeply( $obj->_get_response(''),
+        {}, "_get_response 4 returns correct value" );
+    is_deeply( $obj->_get_response(undef),
+        {}, "_get_response 5 returns correct value" );
+    is_deeply(
+        $obj->_get_response(
+'RESULT=0&PNREF=QAAA1DF4B4F4&RESPMSG=Approved&AUTHCODE=111PNQ&AVSADDR=X&AVSZIP=X&CVV2MATCH=Y&IAVS=X'
+        ),
+        {
+            RESULT    => '0',
+            PNREF     => 'QAAA1DF4B4F4',
+            RESPMSG   => 'Approved',
+            AUTHCODE  => '111PNQ',
+            AVSADDR   => 'X',
+            AVSZIP    => 'X',
+            CVV2MATCH => 'Y',
+            IAVS      => 'X'
+        },
+        "_get_response 6 returns correct value"
+    );
 }

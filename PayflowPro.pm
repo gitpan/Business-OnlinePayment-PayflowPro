@@ -3,21 +3,28 @@ package Business::OnlinePayment::PayflowPro;
 use strict;
 use vars qw($VERSION $DEBUG);
 use Carp qw(carp croak);
-use CGI;
 use Digest::MD5;
 use Business::OnlinePayment::HTTPS 0.06;
 
 use base qw(Business::OnlinePayment::HTTPS);
 
-$VERSION = '0.07';
+$VERSION = '1.00';
 $VERSION = eval $VERSION;
 $DEBUG   = 0;
+
+# CGI::Util was included starting with Perl 5.6. For previous
+# Perls, let them use the old simple CGI method of unescaping
+my $no_cgi_util;
+BEGIN {
+    eval { require CGI::Util; };
+    $no_cgi_util = 1 if $@;
+}
 
 # return current request_id or generate a new one if not yet set
 sub request_id {
     my $self = shift;
     if ( ref($self) ) {
-        $self->{"__request_id"} = shift if (@_); # allow value change/reset
+        $self->{"__request_id"} = shift if (@_);    # allow value change/reset
         $self->{"__request_id"} = $self->_new_request_id()
           unless ( $self->{"__request_id"} );
         return $self->{"__request_id"};
@@ -62,14 +69,16 @@ sub set_defaults {
     $self->port("443");
     $self->path("/transaction");
 
-    $self->build_subs(qw( 
-                          partner vendor
-                          client_certification_id client_timeout
-                          headers test_server
-                          cert_path
-                          order_number avs_code cvv2_response
-                          response_page response_code response_headers
-                     ));
+    $self->build_subs(
+        qw(
+          partner vendor
+          client_certification_id client_timeout
+          headers test_server
+          cert_path
+          order_number avs_code cvv2_response
+          response_page response_code response_headers
+          )
+    );
 
     # module specific data
     if ( $opts{debug} ) {
@@ -83,7 +92,7 @@ sub set_defaults {
     # required: 45 secs recommended by HTTPS Interface Dev Guide
     $self->client_timeout(45);
 
-    $self->test_server( "pilot-payflowpro.paypal.com" );
+    $self->test_server("pilot-payflowpro.paypal.com");
 }
 
 sub _map_fields {
@@ -195,7 +204,22 @@ sub submit {
         STATE       => 'state',
         ZIP         => \$zip,          # 'zip' with non-alnums removed
         COUNTRY     => 'country',
+
+        # As of 8/18/2009: CUSTCODE appears to be cut off at 18
+        # characters and isn't currently reportable.  Consider storing
+        # local customer ids in the COMMENT1/2 fields as a workaround.
+        CUSTCODE        => 'customer_id',
+        SHIPTOFIRSTNAME => 'ship_first_name',
+        SHIPTOLASTNAME  => 'ship_last_name',
+        SHIPTOSTREET    => 'ship_address',
+        SHIPTOCITY      => 'ship_city',
+        SHIPTOSTATE     => 'ship_state',
+        SHIPTOZIP       => 'ship_zip',
+        SHIPTOCOUNTRY   => 'ship_country',
     );
+
+    # Reload %content as _revmap_fields makes our copy old/invalid!
+    %content = $self->content;
 
     my @required = qw( TRXTYPE TENDER PARTNER VENDOR USER PWD );
     if ( $self->transaction_type() eq 'C' ) {    # credit card
@@ -219,6 +243,9 @@ sub submit {
           ACCT CVV2 EXPDATE AMT
           FIRSTNAME LASTNAME NAME EMAIL COMPANYNAME
           STREET CITY STATE ZIP COUNTRY
+          SHIPTOFIRSTNAME SHIPTOLASTNAME
+          SHIPTOSTREET SHIPTOCITY SHIPTOSTATE SHIPTOZIP SHIPTOCOUNTRY
+          CUSTCODE
           )
     );
 
@@ -248,29 +275,60 @@ sub submit {
         "headers"      => \%req_headers,
     );
 
-    my ( $page, $resp, %resp_headers ) =
-      $self->https_post( \%options, \%params );
+    # Payflow Pro does not use URL encoding for the request.  The
+    # following implements their custom encoding scheme.  Per the
+    # developer docs, the PARMLIST Syntax Guidelines are:
+    # - Spaces are allowed in values
+    # - Enclose the PARMLIST in quotation marks ("")
+    # - Do not place quotation marks ("") within the body of the PARMLIST
+    # - Separate all PARMLIST name-value pairs using an ampersand (&)
+    # 
+    # Because '&' and '=' have special meanings/uses values containing
+    # these special characters must be encoded using a special "length
+    # tag".  The "length tag" is simply the length of the "value"
+    # enclosed in square brackets ([]) and appended to the "name"
+    # portion of the name-value pair.
+    #
+    # For more details see the sections 'Using Special Characters in
+    # Values' and 'PARMLIST Syntax Guidelines' in the PayPal Payflow
+    # Pro Developer's Guide
+    #
+    # NOTE: we pass a string to https_post so it does not do encoding
+    my $params_string = join(
+        '&',
+        map {
+            my $key = $_;
+            my $value = defined( $params{$key} ) ? $params{$key} : '';
+            if ( index( $value, '&' ) != -1 || index( $value, '=' ) != -1 ) {
+                $key = $key . "[" . length($value) . "]";
+            }
+            "$key=$value";
+          } keys %params
+    );
 
-    $self->response_code( $resp );
-    $self->response_page( $page );
+    my ( $page, $resp, %resp_headers ) =
+      $self->https_post( \%options, $params_string );
+
+    $self->response_code($resp);
+    $self->response_page($page);
     $self->response_headers( \%resp_headers );
 
     # $page should contain name=value[[&name=value]...] pairs
-    my $cgi = CGI->new("$page");
+    my $response = $self->_get_response( \$page );
 
     # AVS and CVS values may be set on success or failure
     my $avs_code;
-    if ( defined $cgi->param("AVSADDR") or defined $cgi->param("AVSZIP") ) {
-        if ( $cgi->param("AVSADDR") eq "Y" && $cgi->param("AVSZIP") eq "Y" ) {
+    if ( defined $response->{"AVSADDR"} or defined $response->{"AVSZIP"} ) {
+        if ( $response->{"AVSADDR"} eq "Y" && $response->{"AVSZIP"} eq "Y" ) {
             $avs_code = "Y";
         }
-        elsif ( $cgi->param("AVSADDR") eq "Y" ) {
+        elsif ( $response->{"AVSADDR"} eq "Y" ) {
             $avs_code = "A";
         }
-        elsif ( $cgi->param("AVSZIP") eq "Y" ) {
+        elsif ( $response->{"AVSZIP"} eq "Y" ) {
             $avs_code = "Z";
         }
-        elsif ( $cgi->param("AVSADDR") eq "N" or $cgi->param("AVSZIP") eq "N" )
+        elsif ( $response->{"AVSADDR"} eq "N" or $response->{"AVSZIP"} eq "N" )
         {
             $avs_code = "N";
         }
@@ -280,19 +338,51 @@ sub submit {
     }
 
     $self->avs_code($avs_code);
-    $self->cvv2_response( $cgi->param("CVV2MATCH") );
-    $self->result_code( $cgi->param("RESULT") );
-    $self->order_number( $cgi->param("PNREF") );
-    $self->error_message( $cgi->param("RESPMSG") );
-    $self->authorization( $cgi->param("AUTHCODE") );
+    $self->cvv2_response( $response->{"CVV2MATCH"} );
+    $self->result_code( $response->{"RESULT"} );
+    $self->order_number( $response->{"PNREF"} );
+    $self->error_message( $response->{"RESPMSG"} );
+    $self->authorization( $response->{"AUTHCODE"} );
 
     # RESULT must be an explicit zero, not just numerically equal
-    if ( $cgi->param("RESULT") eq "0" ) {
+    if ( defined( $response->{"RESULT"} ) && $response->{"RESULT"} eq "0" ) {
         $self->is_success(1);
     }
     else {
         $self->is_success(0);
     }
+}
+
+# Process the response page for params.  Based on parse_params in CGI
+# by Lincoln D. Stein.
+sub _get_response {
+    my ( $self, $page ) = @_;
+
+    my %response;
+
+    if ( !defined($page) || ( ref($page) && !defined($$page) ) ) {
+        return \%response;
+    }
+
+    my ( $param, $value );
+    foreach ( split( /[&;]/, ref($page) ? $$page : $page ) ) {
+        ( $param, $value ) = split( '=', $_, 2 );
+        next unless defined $param;
+        $value = '' unless defined $value;
+
+        if ($no_cgi_util) {    # use old pre-CGI::Util method of unescaping
+            $param =~ tr/+/ /;    # pluses become spaces
+            $param =~ s/%([0-9a-fA-F]{2})/pack("c",hex($1))/ge;
+            $value =~ tr/+/ /;    # pluses become spaces
+            $value =~ s/%([0-9a-fA-F]{2})/pack("c",hex($1))/ge;
+        }
+        else {
+            $param = CGI::Util::unescape($param);
+            $value = CGI::Util::unescape($value);
+        }
+        $response{$param} = $value;
+    }
+    return \%response;
 }
 
 1;
@@ -546,6 +636,19 @@ from content(%content):
       ZIP         => \$zip, # 'zip' with non-alphanumerics removed
       COUNTRY     => 'country',
 
+      # As of 8/18/2009: CUSTCODE appears to be cut off at 18
+      # characters and isn't currently reportable.  Consider storing
+      # local customer ids in the COMMENT1/2 fields as a workaround.
+      CUSTCODE    => 'customer_id',
+
+      SHIPTOFIRSTNAME => 'ship_first_name',
+      SHIPTOLASTNAME  => 'ship_last_name',
+      SHIPTOSTREET    => 'ship_address',
+      SHIPTOCITY      => 'ship_city',
+      SHIPTOSTATE     => 'ship_state',
+      SHIPTOZIP       => 'ship_zip',
+      SHIPTOCOUNTRY   => 'ship_country',
+
 The required Payflow Pro parameters for credit card transactions are:
 
   TRXTYPE TENDER PARTNER VENDOR USER PWD ORIGID
@@ -603,7 +706,8 @@ response message returned with the transaction result.
 
 As of 0.07, this module communicates with the Payflow gateway directly
 and no longer requires the Payflow Pro SDK or other download.  Thanks
-to Phil Lobbes for this great work.
+to Phil Lobbes for this great work and Josh Rosenbaum for additional
+enhancements and bug fixes.
 
 =head1 AUTHORS
 
