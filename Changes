@@ -1,5 +1,10 @@
 Revision history for Perl extension Business::OnlinePayment::PayflowPro.
 
+1.01  Tue Sep 22 17:03:00 EDT 2009 plobbes
+	- rt.cpan.org#49349: Fix Reference Transactions
+	  NOTE: enable in PayfloPro manager transaction settings
+	  Josh Rosenbaum
+
 1.00  Sat Aug 22 01:13:34 EDT 2009 plobbes
 	- bump version to 1.00, should have probably done this with
 	  0.07 as it was a radical enough departure from 0.06, also

@@ -8,7 +8,7 @@ use Business::OnlinePayment::HTTPS 0.06;
 
 use base qw(Business::OnlinePayment::HTTPS);
 
-$VERSION = '1.00';
+$VERSION = '1.01';
 $VERSION = eval $VERSION;
 $DEBUG   = 0;
 
@@ -222,19 +222,17 @@ sub submit {
     %content = $self->content;
 
     my @required = qw( TRXTYPE TENDER PARTNER VENDOR USER PWD );
+
+    # NOTE: we croak above if transaction_type ne 'C'
     if ( $self->transaction_type() eq 'C' ) {    # credit card
-        if (   $content{'action'} =~ /^[CDV]$/
-            && defined( $content{'ORIGID'} )
-            && length( $content{'ORIGID'} ) )
-        {
+        if ( defined( $content{'ORIGID'} ) && length( $content{'ORIGID'} ) ) {
             push @required, qw(ORIGID);
         }
         else {
-
-            # never get here, we croak above if transaction_type ne 'C'
             push @required, qw(AMT ACCT EXPDATE);
         }
     }
+
     $self->required_fields(@required);
 
     my %params = $self->get_fields(
